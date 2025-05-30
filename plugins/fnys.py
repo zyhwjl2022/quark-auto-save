@@ -1,3 +1,4 @@
+# 签名模块：https://github.com/thshu/fnos-tv
 import hashlib
 import json
 import math
@@ -7,7 +8,6 @@ from urllib.parse import parse_qsl, urlencode, unquote
 
 import requests
 
-# 来源：https://github.com/thshu/fnos-tv
 class FNSIGN:
     @staticmethod
     def get_random_number(min_val: float = 0, max_val: float = 100, round_type: str = 'round') -> int:
