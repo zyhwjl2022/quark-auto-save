@@ -1,4 +1,3 @@
-# 签名模块：https://github.com/thshu/fnos-tv
 import hashlib
 import json
 import math
@@ -8,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, unquote
 
 import requests
 
+# 来源：https://github.com/thshu/fnos-tv
 class FNSIGN:
     @staticmethod
     def get_random_number(min_val: float = 0, max_val: float = 100, round_type: str = 'round') -> int:
@@ -256,8 +256,6 @@ class Fnys:
         )
         if media_name := task_config.get("media_name"):
             try:
-                print(f"{self.plugin_name} 模块扫描媒体库【{media_name}】")
-                
                 # 获取媒体列表
                 media_list = FNWEB.get_media_list(self.token)
                 
