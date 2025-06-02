@@ -11,6 +11,8 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5 as Cipher_pkcs1_v1_5
 from Crypto.Cipher import AES
 from Crypto.Hash import HMAC, SHA256
+import random
+import string
 
 """
     配合 飞牛系统的Alist 项目，转存后自动下载
@@ -116,6 +118,19 @@ def format_byte_repr(byte_num):
 
 class Fnos:
 
+    @staticmethod
+    def processMediaType(savePath):
+        if "电影" in savePath:
+            return "电影"
+        elif "电视剧" in savePath:
+            return "电视剧"
+        elif "动漫" in savePath:
+            return "动漫"
+        elif "综艺" in savePath:
+            return "综艺"
+        else:
+            return "其他"
+
     default_config = {
         "order": "",  # 执行顺序
         "enable": "",  # 是否启用
@@ -123,13 +138,16 @@ class Fnos:
         "user": "",  # 飞牛的用户账号
         "password": "",  # 飞牛的用户密码
         "mount_path": "",  # Alist挂载的地址
+        "save_path": "", #飞牛影视库地址 /vol1/1000/PT/夸克/电影
         "download_wait": "",  # 是否等待下载完成
     }
     default_task_config = {
-        "download_path": "",  # 下载路径
+        # "download_path": "",  # 下载路径
         "save_to_local": False,  # 是否保存本地
     }
     is_active = True
+    download_path = ''
+    preReqid = None  # 类变量，初始为None
 
     def __init__(self, **kwargs):
         self.plugin_name = self.__class__.__name__.lower()
@@ -141,6 +159,8 @@ class Fnos:
                     print(f"{self.__class__.__name__} 模块缺少必要参数: {key}")
             if self.websocket and self.user and self.password and self.mount_path and self.download_wait:
                 self.is_active = True
+                if Fnos.preReqid is None:  # 只有在preReqid为None时才赋值
+                    Fnos.preReqid = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
     def run(self, task, **kwargs):
         dramaList = []
@@ -149,16 +169,20 @@ class Fnos:
                 if node.data['is_dir'] is False:
                     dramaList.append(f'"{self.mount_path}{node.data['path']}"')
         task_config = task.get("addition", {}).get(self.plugin_name, self.default_task_config)
+        if self.save_path.endswith('/'):
+            self.save_path = self.save_path[:-1] 
+        savePath = task.get('savepath')
+        self.download_path = self.save_path+"/"+self.processMediaType(savePath)
         if len(dramaList) < 0:
             print(f"飞牛:😄 此次转存无需下载文件!")
         elif not task_config.get('save_to_local'):
             print(f"飞牛:😦 此次转存未启用下载!")
         else:
-            print(f"飞牛:🎞️ 转存有需下载文件️，保存路径：{task_config.get("download_path")}/{task.get("taskname")}")
+            print(f"飞牛:🎞️ 转存有需下载文件️，保存路径：{self.download_path}/{task.get("taskname")}")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             websocket = loop.run_until_complete(create_websocket(self.websocket))
-            loop.run_until_complete(websocket.send('{"reqid":"676cf70d00000000000000000001","req":"util.crypto.getRSAPub"}'))
+            loop.run_until_complete(websocket.send('{"reqid":"'+self.preReqid+'00000000000000000001","req":"util.crypto.getRSAPub"}'))
             try:
                 aesKeyByte = None
                 aesIvByte = None
@@ -169,7 +193,7 @@ class Fnos:
                     if "-----BEGIN PUBLIC KEY-----" in response:
                         pub = json.loads(response).get("pub")
                         si = json.loads(response).get("si")
-                        userData = '{"reqid":"676cf70d00000000000000000002","user":"'+self.user+'","password":"'+self.password+'","deviceType":"Browser","deviceName":"Mac OS-Google Chrome","stay":true,"req":"user.login","si":"' + si + '"}'
+                        userData = '{"reqid":"'+self.preReqid+'00000000000000000002","user":"'+self.user+'","password":"'+self.password+'","deviceType":"Browser","deviceName":"Mac OS-Google Chrome","stay":true,"req":"user.login","si":"' + si + '"}'
                         aesKeyStr = "lUfJn1XJ9akUvmmwQplpVIy1XNC2jJ3q"
                         aesIv = secrets.token_bytes(16)
                         aesIvBase64 = base64.b64encode(aesIv).decode('utf-8')
@@ -180,29 +204,29 @@ class Fnos:
                         aesIvByte = aesIv
                         sendMsg = '{"rsa":"' + rsa + '","iv":"' + iv + '","aes":"' + aes + '","req":"encrypted"}'
                         loop.run_until_complete(websocket.send(sendMsg))
-                    elif "676cf70d00000000000000000002" in response:
+                    elif self.preReqid+"00000000000000000002" in response:
                         print(f"飞牛:👨 用户认证成功🏅")
                         secret = json.loads(response).get('secret')
                         keys = decrypt(secret, aesKeyByte, aesIvByte)
                         Secret = base64.b64decode(keys)
-                        s = '{"reqid":"676cf70d00000000000000000003","path":"'+task_config.get("download_path")+'/'+task.get("taskname")+'","req":"file.mkdir"}'
+                        s = '{"reqid":"'+self.preReqid+'00000000000000000003","path":"'+self.download_path+'/'+task.get("taskname")+'","req":"file.mkdir"}'
                         mark = base64.b64encode(HMAC.new(Secret, s.encode(), digestmod=SHA256).digest()).decode()
                         loop.run_until_complete(websocket.send(mark + s))
                     elif "pong" in response:
                         pass
-                    elif "676cf70d00000000000000000003" in response:
+                    elif self.preReqid+"00000000000000000003" in response:
                         if '"result":"succ"' in response or '"errno":4102' in response:
-                            print(f"飞牛:📄 文件夹处理完成 {task_config.get("download_path")}/{task.get("taskname")}")
-                            a = '{"reqid":"676cf70d00000000000000000004","files":[' + ','.join(dramaList) + '],"pathTo":"' + task_config.get("download_path") +'/'+task.get("taskname") +'","overwrite":1,"description":"ABetsy剧集下载","req":"file.cp"}'
+                            print(f"飞牛:📄 文件夹处理完成 {self.download_path}/{task.get("taskname")}")
+                            a = '{"reqid":"'+self.preReqid+'00000000000000000004","files":[' + ','.join(dramaList) + '],"pathTo":"' + self.download_path +'/'+task.get("taskname") +'","overwrite":1,"description":"夸克自动下载【'+task.get("taskname")+'】","req":"file.cp"}'
                             mark = base64.b64encode(HMAC.new(Secret, a.encode(), digestmod=SHA256).digest()).decode()
                             loop.run_until_complete(websocket.send(mark + a))
                         elif '"result":"fail"' in response:
-                            print(f"飞牛:📄 文件夹创建失败❌,请检查文件夹路径 {task_config.get("download_path")}/{task.get("taskname")}")
+                            print(f"飞牛:📄 文件夹创建失败❌,请检查文件夹路径 {self.download_path}/{task.get("taskname")}")
                             break
-                    elif "676cf70d00000000000000000004" in response and '"sysNotify":"taskId"' in response:
+                    elif self.preReqid+"00000000000000000004" in response and '"sysNotify":"taskId"' in response:
                         print(f"飞牛:💼 收到资源下载任务")
                         pass
-                    elif "676cf70d00000000000000000004" in response and 'percent' in response:
+                    elif self.preReqid+"00000000000000000004" in response and 'percent' in response:
                         data = json.loads(response)
                         if 'true' in self.download_wait.lower():
                             if num != 0 or num < int(data.get('percent')):
@@ -215,17 +239,17 @@ class Fnos:
                         else:
                             print(f"飞牛:🎞️ 下载任务后台执行")
                             break
-                    elif '"taskInfo":{"reqid":"676cf70d00000000000000000004"' in response:
+                    elif '"taskInfo":{"reqid":'+self.preReqid+'00000000000000000004"' in response:
                         pass
-                    elif "676cf70d00000000000000000004" in response and '"result":"succ"' in response:
+                    elif self.preReqid+"00000000000000000004" in response and '"result":"succ"' in response:
                         print()
                         print(f"飞牛: 下载任务完成✅")
                         break
-                    elif "676cf70d00000000000000000004" in response and '"result":"fail"' in response:
+                    elif self.preReqid+"00000000000000000004" in response and '"result":"fail"' in response:
                         print()
                         print(f"飞牛: 下载任务异常❌,检查您配置")
                         break
-                    elif "676cf70d00000000000000000004" in response and '"result":"cancel"' in response:
+                    elif self.preReqid+"00000000000000000004" in response and '"result":"cancel"' in response:
                         print()
                         print(f"飞牛: 下载任务被取消❌")
                         break
