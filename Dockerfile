@@ -7,6 +7,12 @@ WORKDIR /app
 # 将当前目录中的文件添加到工作目录中
 COPY . /app
 
+# 添加构建依赖（关键修改点）
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
