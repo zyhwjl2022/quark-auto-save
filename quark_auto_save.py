@@ -18,6 +18,7 @@ import importlib
 import traceback
 import urllib.parse
 from datetime import datetime
+from app.sdk.cloudsaver import CloudSaver
 
 # 兼容青龙
 try:
@@ -298,8 +299,11 @@ class MagicRename:
         if not file_list:
             return
         self.dir_filename_dict = {}
-        filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        # filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        filename_list = file_list
         filename_list.sort()
+        if not filename_list:
+            return
         if match := re.search(r"\{I+\}", replace):
             # 由替换式转换匹配式
             magic_i = match.group()
@@ -787,6 +791,8 @@ class Quark:
         # 判断资源失效记录
         if task.get("shareurl_ban"):
             print(f"《{task['taskname']}》：{task['shareurl_ban']}")
+            print(f"开始尝试搜索最新资源")
+            self.get_new_url(task)
             return
 
         # 链接转换所需参数
@@ -802,7 +808,8 @@ class Quark:
         else:
             message = get_stoken.get("message")
             add_notify(f"❌《{task['taskname']}》：{message}\n")
-            task["shareurl_ban"] = message
+            print(f"开始尝试搜索最新资源")
+            self.get_new_url(task)
             return
         # print("stoken: ", stoken)
 
@@ -815,6 +822,72 @@ class Quark:
         else:
             print(f"任务结束：没有新的转存任务")
             return False
+        
+    def get_new_url(self,task):
+        try:
+            cs_data = CONFIG_DATA.get("source", {}).get("cloudsaver", {})
+            if (
+                cs_data.get("server")
+                and cs_data.get("username")
+                and cs_data.get("password")
+            ):
+                cs = CloudSaver(cs_data.get("server"))
+                cs.set_auth(
+                    cs_data.get("username", ""),
+                    cs_data.get("password", ""),
+                    cs_data.get("token", ""),
+                )
+                search = cs.auto_login_search(task['taskname'].lower())
+                if search.get("success"):
+                    if search.get("new_token"):
+                        cs_data["token"] = search.get("new_token")
+                    search_results = cs.clean_search_results(search.get("data"))
+                    # print(search_results)
+                    json_data = json.dumps(
+                        {"success": True, "source": "CloudSaver", "data": search_results}
+                    )
+                    json_data = json.loads(json_data)
+                    for item in json_data["data"]:
+                        print(item["shareurl"])
+                        pwd_id, passcode, pdir_fid, _ = self.extract_url(item["shareurl"])
+                        get_stoken = self.get_stoken(pwd_id, passcode)
+                        if get_stoken.get("status") == 200:
+                            stoken = get_stoken["data"]["stoken"]
+                        elif get_stoken.get("status") == 500:
+                            print(f"跳过任务：网络异常 {get_stoken.get('message')}")
+                            continue
+                        else:
+                            message = get_stoken.get("message")
+                            print(f"{message}【继续检查】")
+                            continue
+
+                        try:
+                            updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+                            if updated_tree.size(1) > 0:
+                                self.do_rename(updated_tree)
+                                print()
+                                add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
+                                print(f"任务结束：更新url：{item['shareurl']}")
+                            else:
+                                print(f"任务结束：没有新的转存任务，更新任务")
+                                add_notify(f"✅《{task['taskname']}》没有新的转存任务，更新任务：\n")
+                            
+                            task["shareurl"] = item['shareurl']
+                            task["shareurl_ban"] = ''
+                            for i, t in enumerate(CONFIG_DATA.get("tasklist", [])):
+                                if t.get("taskname") == task.get("taskname"):
+                                    CONFIG_DATA["tasklist"][i] = task
+                                    break
+                            return updated_tree
+                        except Exception as e:
+                            print(f"保存错误{e}")
+                else:
+                    print("搜索失败")
+                print("没有搜索到资源！")
+            else:
+                print("服务未配置")
+        except Exception as e:
+            print(f"请求错误{e}")
 
     def dir_check_and_save(self, task, pwd_id, stoken, pdir_fid="", subdir_path=""):
         tree = Tree()

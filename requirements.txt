@@ -2,3 +2,6 @@ flask
 apscheduler
 requests
 treelib
+#fnos
+websockets
+pycryptodome
