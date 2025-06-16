@@ -662,6 +662,15 @@ class Quark:
         ).json()
         return response
 
+    def unarchive(self, fid, parent_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        payload = {"fid":fid,"pwd":"","select_mode":0,"path_no_list":[],"curr_path_no":0,"remember_pwd":False,"conflict_mode":3,"suffix_type":0,"to_pdir_fid":parent_fid}
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
     def delete(self, filelist):
         url = f"{self.BASE_URL}/1/clouddrive/file/delete"
         querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
@@ -816,6 +825,7 @@ class Quark:
         updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
         if updated_tree.size(1) > 0:
             self.do_rename(updated_tree)
+            self.do_unarchive(updated_tree,task)
             print()
             add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
             return updated_tree
@@ -865,6 +875,7 @@ class Quark:
                             updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
                             if updated_tree.size(1) > 0:
                                 self.do_rename(updated_tree)
+                                self.do_unarchive(updated_tree,task)
                                 print()
                                 add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
                                 print(f"任务结束：更新url：{item['shareurl']}")
@@ -1042,13 +1053,38 @@ class Quark:
         for child in tree.children(node_id):
             file = child.data
             if file.get("is_dir"):
-                # self.do_rename(tree, child.identifier)
-                pass
+                self.do_rename(tree, child.identifier)
             elif file.get("file_name_re") and file["file_name_re"] != file["file_name"]:
                 rename_ret = self.rename(file["fid"], file["file_name_re"])
                 print(f"重命名：{file['file_name']} → {file['file_name_re']}")
                 if rename_ret["code"] != 0:
                     print(f"      ↑ 失败，{rename_ret['message']}")
+
+    def do_unarchive(self, tree,task, node_id=None):
+        parent_fid = None
+        if node_id is None:
+            node_id = tree.root
+        for child in tree.children(node_id):
+            file = child.data
+            if file.get("is_dir"):
+                self.do_unarchive(tree,task, child.identifier)
+            elif file.get("obj_category")=='archive':
+                if parent_fid == None:
+                    parent_fid = self.get_fids([task['savepath']])[0]["fid"]
+
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    unarchive_ret = self.unarchive(file["fid"], parent_fid)
+                    print(f"解压：{file['file_name']} (尝试 {attempt + 1}/{max_attempts})")
+                    
+                    if unarchive_ret["code"] == 0:
+                        break  # 解压成功，跳出重试循环
+                    else:
+                        if attempt < max_attempts - 1:  # 不是最后一次尝试
+                            print(f"      ↑ 失败，{unarchive_ret['message']}，{max_attempts - attempt - 1} 秒后重试...")
+                            time.sleep(max_attempts - attempt - 1)  # 指数退避策略
+                        else:
+                            print(f"      ↑ 失败，{unarchive_ret['message']}，已达到最大重试次数")
 
     def _get_file_icon(self, f):
         if f.get("dir"):
