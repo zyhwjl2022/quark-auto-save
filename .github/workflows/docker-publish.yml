@@ -95,17 +95,19 @@ jobs:
       - name: Get Commit Messages
         id: get_commit_messages
         run: |
-          # Get the latest tag
-          LATEST_TAG=$(git describe --tags --abbrev=0 HEAD^)
+          # 尝试获取最新标签，如果没有则返回空值而不是报错
+          LATEST_TAG=$(git describe --tags --abbrev=0 HEAD^ || echo "")
 
-          # If there is no latest tag, get only the latest commit message
+          # 如果没有最新标签，获取所有提交信息；否则获取从上一个标签到HEAD的提交信息
           if [ -z "$LATEST_TAG" ]; then
-            COMMITS=$(git log -1 --pretty=format:'- %s (%h)')
+            echo "没有找到标签，获取所有提交信息"
+            COMMITS=$(git log --pretty=format:'- %s (%h)' --no-merges)
           else
+            echo "找到标签 $LATEST_TAG，获取从该标签到HEAD的提交信息"
             COMMITS=$(git log --pretty=format:'- %s (%h)' --no-merges "$LATEST_TAG"..HEAD)
           fi
 
-          # Output Multi-Line String
+          # 输出多行字符串
           echo "commits<<EOF" >> $GITHUB_OUTPUT
           echo "$COMMITS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
