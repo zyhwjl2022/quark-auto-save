@@ -7,6 +7,11 @@ WORKDIR /app
 # 将当前目录中的文件添加到工作目录中
 COPY . /app
 
+RUN apk add --no-cache \
+    build-base \
+    openssl-dev \
+    python3-dev
+
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 

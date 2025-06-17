@@ -18,6 +18,7 @@ import importlib
 import traceback
 import urllib.parse
 from datetime import datetime
+from app.sdk.cloudsaver import CloudSaver
 
 # 兼容青龙
 try:
@@ -298,8 +299,11 @@ class MagicRename:
         if not file_list:
             return
         self.dir_filename_dict = {}
-        filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        # filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        filename_list = file_list
         filename_list.sort()
+        if not filename_list:
+            return
         if match := re.search(r"\{I+\}", replace):
             # 由替换式转换匹配式
             magic_i = match.group()
@@ -649,10 +653,28 @@ class Quark:
         ).json()
         return response
 
+    def move(self, filelist,pdir_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/file/move"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        payload = {"action_type":1,"to_pdir_fid":pdir_fid,"filelist":filelist,"exclude_fids":[]}
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
     def rename(self, fid, file_name):
         url = f"{self.BASE_URL}/1/clouddrive/file/rename"
         querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         payload = {"fid": fid, "file_name": file_name}
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
+    def unarchive(self, fid, parent_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        payload = {"fid":fid,"pwd":"","select_mode":0,"path_no_list":[],"curr_path_no":0,"remember_pwd":False,"conflict_mode":3,"suffix_type":0,"to_pdir_fid":parent_fid}
         response = self._send_request(
             "POST", url, json=payload, params=querystring
         ).json()
@@ -787,6 +809,8 @@ class Quark:
         # 判断资源失效记录
         if task.get("shareurl_ban"):
             print(f"《{task['taskname']}》：{task['shareurl_ban']}")
+            print(f"开始尝试搜索最新资源")
+            self.get_new_url(task)
             return
 
         # 链接转换所需参数
@@ -802,12 +826,14 @@ class Quark:
         else:
             message = get_stoken.get("message")
             add_notify(f"❌《{task['taskname']}》：{message}\n")
-            task["shareurl_ban"] = message
+            print(f"开始尝试搜索最新资源")
+            self.get_new_url(task)
             return
         # print("stoken: ", stoken)
 
         updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
         if updated_tree.size(1) > 0:
+            self.do_unarchive(updated_tree,task)
             self.do_rename(updated_tree)
             print()
             add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
@@ -815,6 +841,76 @@ class Quark:
         else:
             print(f"任务结束：没有新的转存任务")
             return False
+        
+    def get_new_url(self,task):
+        if not task['update_url']:
+            print("⚠️本次任务未启用更新资源！")
+            return
+        try:
+            cs_data = CONFIG_DATA.get("source", {}).get("cloudsaver", {})
+            if (
+                cs_data.get("server")
+                and cs_data.get("username")
+                and cs_data.get("password")
+            ):
+                cs = CloudSaver(cs_data.get("server"))
+                cs.set_auth(
+                    cs_data.get("username", ""),
+                    cs_data.get("password", ""),
+                    cs_data.get("token", ""),
+                )
+                search = cs.auto_login_search(task['taskname'].lower())
+                if search.get("success"):
+                    if search.get("new_token"):
+                        cs_data["token"] = search.get("new_token")
+                    search_results = cs.clean_search_results(search.get("data"))
+                    # print(search_results)
+                    json_data = json.dumps(
+                        {"success": True, "source": "CloudSaver", "data": search_results}
+                    )
+                    json_data = json.loads(json_data)
+                    for item in json_data["data"]:
+                        print(item["shareurl"])
+                        pwd_id, passcode, pdir_fid, _ = self.extract_url(item["shareurl"])
+                        get_stoken = self.get_stoken(pwd_id, passcode)
+                        if get_stoken.get("status") == 200:
+                            stoken = get_stoken["data"]["stoken"]
+                        elif get_stoken.get("status") == 500:
+                            print(f"跳过任务：网络异常 {get_stoken.get('message')}")
+                            continue
+                        else:
+                            message = get_stoken.get("message")
+                            print(f"{message}【继续检查】")
+                            continue
+
+                        try:
+                            updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+                            if updated_tree.size(1) > 0:
+                                self.do_unarchive(updated_tree,task)
+                                self.do_rename(updated_tree)
+                                print()
+                                add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
+                                print(f"任务结束：更新url：{item['shareurl']}")
+                            else:
+                                print(f"任务结束：没有新的转存任务，更新任务")
+                                add_notify(f"✅《{task['taskname']}》没有新的转存任务，更新任务：\n")
+                            
+                            task["shareurl"] = item['shareurl']
+                            task["shareurl_ban"] = ''
+                            for i, t in enumerate(CONFIG_DATA.get("tasklist", [])):
+                                if t.get("taskname") == task.get("taskname"):
+                                    CONFIG_DATA["tasklist"][i] = task
+                                    break
+                            return updated_tree
+                        except Exception as e:
+                            print(f"保存错误{e}")
+                else:
+                    print(f"搜索失败，结果：{search}")
+                print("没有搜索到资源！")
+            else:
+                print("服务未配置")
+        except Exception as e:
+            print(f"请求错误{e}")
 
     def dir_check_and_save(self, task, pwd_id, stoken, pdir_fid="", subdir_path=""):
         tree = Tree()
@@ -874,7 +970,7 @@ class Quark:
                 task.get("update_subdir", "") if share_file["dir"] else pattern
             )
             # 正则文件名匹配
-            if re.search(search_pattern, share_file["file_name"]):
+            if re.search(search_pattern, share_file["file_name"]) or share_file['obj_category'] == "archive":
                 # 判断原文件名是否存在，处理忽略扩展名
                 if not mr.is_exists(
                     share_file["file_name"],
@@ -969,13 +1065,99 @@ class Quark:
         for child in tree.children(node_id):
             file = child.data
             if file.get("is_dir"):
-                # self.do_rename(tree, child.identifier)
-                pass
+                self.do_rename(tree, child.identifier)
             elif file.get("file_name_re") and file["file_name_re"] != file["file_name"]:
                 rename_ret = self.rename(file["fid"], file["file_name_re"])
                 print(f"重命名：{file['file_name']} → {file['file_name_re']}")
                 if rename_ret["code"] != 0:
                     print(f"      ↑ 失败，{rename_ret['message']}")
+
+    def do_move(self, fileName_list,pdir_path,filelist,pdir_fid):
+        move_ret = self.move(filelist,pdir_fid)
+        print(f"移动：{fileName_list} → {pdir_path}")
+        if move_ret["code"] != 0:
+            print(f"      ↑ 失败，{move_ret['message']}")
+
+    def do_unarchive(self, tree,task, node_id=None):
+        parent_fid = None
+        file_list = []
+        del_file_list = []
+        fileName_list = []
+        task_list = []
+        if node_id is None:
+            node_id = tree.root
+            print("📦开始解压")
+        for child in tree.children(node_id):
+            file = child.data
+            if file.get("is_dir"):
+                self.do_unarchive(tree,task, child.identifier)
+            elif file.get("obj_category")=='archive':
+                if parent_fid == None:
+                    parent_fid = self.get_fids([task['savepath']])[0]["fid"]
+
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    unarchive_ret = self.unarchive(file["fid"], parent_fid)
+                    if(attempt>0):print(f"解压：{file['file_name']} (尝试 {attempt + 1}/{max_attempts})")
+                    try:
+                        if unarchive_ret["code"] == 0:
+                            task_list.append(unarchive_ret["data"]["task_id"])
+                            break  # 解压成功，跳出重试循环
+                        else:
+                            if attempt < max_attempts - 1:  # 不是最后一次尝试
+                                print(f"      ↑ 失败，{unarchive_ret['message']}，{max_attempts - attempt - 1} 秒后重试...")
+                                time.sleep(max_attempts - attempt - 1)  # 指数退避策略
+                            else:
+                                print(f"      ↑ 失败，{unarchive_ret['message']}，已达到最大重试次数")
+                    except Exception as e:
+                        print(f"出现错误：{e}")
+        if parent_fid != None:
+            
+            # 文件命名类
+            mr = MagicRename(CONFIG_DATA.get("magic_regex", {}))
+            mr.set_taskname(task["taskname"])
+
+            # 魔法正则转换
+            pattern, replace = mr.magic_regex_conv(
+                task.get("pattern", ""), task.get("replace", "")
+            )
+            time.sleep(2)
+            print("ℹ️开始查询解压任务")        
+            for taskid in task_list:
+                query_task_return = self.query_task(taskid)
+                if query_task_return["code"] == 0:
+                    for item in query_task_return['data']['unarchive_result']['list']:
+                        
+                        dir_file_list = self.ls_dir(item['fid'])["data"]["list"]
+                        
+                        dir_fid_list = [dir_file["fid"] for dir_file in dir_file_list]
+                        dir_fileName_list = [dir_file["file_name"] for dir_file in dir_file_list]
+                        dir_pdir_fid_list = [dir_file["pdir_fid"] for dir_file in dir_file_list]
+                        file_list.extend(dir_fid_list)
+                        del_file_list.extend(dir_pdir_fid_list)
+                        fileName_list.extend(dir_fileName_list)
+
+                        for fileItem in dir_file_list:
+                            icon = self._get_file_icon(fileItem)
+                            tree.create_node(
+                                f"{icon}{fileItem['file_name']}",
+                                fileItem["fid"],
+                                parent=node_id,
+                                data={
+                                    "file_name": fileItem["file_name"],
+                                    "file_name_re": mr.sub(pattern, replace, fileItem["file_name"]),
+                                    "fid": fileItem["fid"],
+                                    "path": task['savepath'],
+                                    "is_dir": fileItem["dir"],
+                                    "obj_category": fileItem.get("obj_category", ""),
+                                },
+                            )
+
+
+            print("❇️开始移动已解压文件")
+            self.do_move(fileName_list,task['savepath'],file_list,parent_fid)
+            print("🗑️开始删除解压文件夹")
+            delete_return = self.delete(del_file_list)
 
     def _get_file_icon(self, f):
         if f.get("dir"):
