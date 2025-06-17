@@ -252,8 +252,15 @@ def get_task_suggestions():
                     cs_data["token"] = search.get("new_token")
                     Config.write_json(CONFIG_PATH, config_data)
                 search_results = cs.clean_search_results(search.get("data"))
+                search_results_array = []
+                account = Quark()
+                for item in search_results:
+                    if(account.check_url(item['shareurl'])):
+                        search_results_array.append(item)
+                    else:
+                        print(f"移除失效资源：{item['shareurl']}")
                 return jsonify(
-                    {"success": True, "source": "CloudSaver", "data": search_results}
+                    {"success": True, "source": "CloudSaver", "data": search_results_array}
                 )
             else:
                 return jsonify({"success": True, "message": search.get("message")})

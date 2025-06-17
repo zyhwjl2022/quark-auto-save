@@ -841,6 +841,17 @@ class Quark:
         else:
             print(f"任务结束：没有新的转存任务")
             return False
+    
+    def check_url(self,shareurl):
+        pwd_id, passcode, pdir_fid, _ = self.extract_url(shareurl)
+        get_stoken = self.get_stoken(pwd_id, passcode)
+        if get_stoken.get("status") == 200:
+            return True
+        elif get_stoken.get("status") == 500:
+            print(f"检查资源：网络异常 {get_stoken.get('message')}")
+            return False
+        else:
+            return False
         
     def get_new_url(self,task):
         if not task['update_url']:
