@@ -299,8 +299,8 @@ class MagicRename:
         if not file_list:
             return
         self.dir_filename_dict = {}
-        # filename_list = [f["file_name"] for f in file_list if not f["dir"]]
-        filename_list = file_list
+        filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        # filename_list = file_list
         filename_list.sort()
         if not filename_list:
             return
@@ -854,7 +854,7 @@ class Quark:
             return False
         
     def get_new_url(self,task):
-        if not task['update_url']:
+        if 'update_url' not in task or not task['update_url']:
             print("⚠️本次任务未启用更新资源！")
             return
         try:
