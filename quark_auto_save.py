@@ -832,6 +832,11 @@ class Quark:
         # print("stoken: ", stoken)
 
         updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+        if not updated_tree:
+            # 分享为空，文件已被分享者删除 
+            print(f"开始尝试搜索最新资源")
+            self.get_new_url(task)
+            return
         if updated_tree.size(1) > 0:
             self.do_unarchive(updated_tree,task)
             self.do_rename(updated_tree)
@@ -896,6 +901,9 @@ class Quark:
 
                         try:
                             updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
+                            if not updated_tree:
+                                # 分享为空，文件已被分享者删除 
+                                continue
                             if updated_tree.size(1) > 0:
                                 self.do_unarchive(updated_tree,task)
                                 self.do_rename(updated_tree)
@@ -933,7 +941,7 @@ class Quark:
             if subdir_path == "":
                 task["shareurl_ban"] = "分享为空，文件已被分享者删除"
                 add_notify(f"❌《{task['taskname']}》：{task['shareurl_ban']}\n")
-            return tree
+            return False
         elif (
             len(share_file_list) == 1
             and share_file_list[0]["dir"]
